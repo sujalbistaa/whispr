@@ -1,0 +1,10 @@
+# Local database file
+whispr.db
+whispr.db-journal
+
+# Compiled binary
+/bin
+bin/
+
+# Environment file
+.env

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whispr - Confession Wall</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        /* Simple dark mode */
+        body { background-color: #111827; color: #d1d5db; }
+        /* Style for new posts fading in */
+        .post-new {
+            animation: fadeIn 0.5s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="antialiased">
+
+    <div x-data="whisprApp()" class="container mx-auto max-w-2xl p-4">
+
+        <header class="text-center my-8">
+            <h1 class="text-5xl font-bold text-white">Whispr</h1>
+            <p class="text-lg text-gray-400">Your real-time anonymous confession wall.</p>
+        </header>
+
+        <form @submit.prevent="submitPost" class="mb-8">
+            <textarea
+                x-model="newPostContent"
+                class="w-full p-3 bg-gray-800 border-2 border-gray-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                rows="3"
+                placeholder="What's your confession? (Max 1000 chars)"
+                maxlength="1000"
+            ></textarea>
+            <div class="flex justify-between items-center mt-2">
+                <span x-text="newPostContent.length + ' / 1000'" class="text-sm text-gray-500"></span>
+                <button
+                    type="submit"
+                    :disabled="isLoading || newPostContent.length === 0"
+                    class="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <span x-show="!isLoading">Post</span>
+                    <span x-show="isLoading">Posting...</span>
+                </button>
+            </div>
+            <p x-show="errorMessage" x-text="errorMessage" class="text-red-400 text-sm mt-2"></p>
+        </form>
+
+        <div class="mb-4 flex border-b border-gray-700">
+            <button
+                @click="setView('latest')"
+                :class="viewMode === 'latest' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'"
+                class="px-4 py-2 font-medium border-b-2 -mb-px">
+                Latest
+            </button>
+            <button
+                @click="setView('trending')"
+                :class="viewMode === 'trending' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'"
+                class="px-4 py-2 font-medium border-b-2 -mb-px">
+                Trending
+            </button>
+        </div>
+
+        <div class="space-y-4">
+            <template x-for="post in posts" :key="post.id">
+                <article
+                    :id="'post-' + post.id"
+                    class="bg-gray-800 rounded-lg shadow p-4 flex space-x-4 transition-all">
+                    <div class="flex flex-col items-center space-y-1">
+                        <button @click="vote(post.id, 1)" class="p-1 text-gray-400 hover:text-green-500 rounded-full">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path></svg>
+                        </button>
+                        <span x-text="post.score" class="text-lg font-bold text-white"></span>
+                        <button @click="vote(post.id, -1)" class="p-1 text-gray-400 hover:text-red-500 rounded-full">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </button>
+                    </div>
+                    <div class="flex-1">
+                        <p x-text="post.content" class="text-white text-lg whitespace-pre-wrap"></p>
+                        <p class="text-sm text-gray-500 mt-2" x-text="new Date(post.createdAt).toLocaleString()"></p>
+                    </div>
+                </article>
+            </template>
+        </div>
+    </div>
+
+    <script>
+        function whisprApp() {
+            return {
+                // --- Data ---
+                posts: [],
+                newPostContent: '',
+                isLoading: false,
+                errorMessage: '',
+                viewMode: 'latest', // 'latest' or 'trending'
+                ws: null,
+
+                // --- Methods ---
+
+                /**
+                 * Called when the component is initialized.
+                 */
+                init() {
+                    this.fetchPosts();
+                    this.connectWebSocket();
+                },
+
+                /**
+                 * Sets the view mode and fetches new posts.
+                 */
+                setView(mode) {
+                    this.viewMode = mode;
+                    this.fetchPosts();
+                },
+
+                /**
+                 * Fetches posts from the API based on viewMode.
+                 */
+                async fetchPosts() {
+                    this.isLoading = true;
+                    try {
+                        const response = await fetch(`/api/${this.viewMode}`);
+                        if (!response.ok) throw new Error('Failed to fetch posts.');
+                        this.posts = await response.json();
+                    } catch (error) {
+                        this.errorMessage = error.message;
+                    } finally {
+                        this.isLoading = false;
+                    }
+                },
+
+                /**
+                 * Submits a new post to the API.
+                 */
+                async submitPost() {
+                    if (this.newPostContent.length === 0) return;
+                    this.isLoading = true;
+                    this.errorMessage = '';
+                    try {
+                        const response = await fetch('/api/posts', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ content: this.newPostContent })
+                        });
+                        
+                        if (response.status === 429) {
+                            throw new Error('You are posting too fast. Please wait.');
+                        }
+                        if (!response.ok) {
+                            throw new Error('Failed to submit post.');
+                        }
+                        
+                        // We don't need to add the post here.
+                        // The WebSocket 'new_post' message will do it.
+                        this.newPostContent = '';
+                    } catch (error) {
+                        this.errorMessage = error.message;
+                    } finally {
+                        this.isLoading = false;
+                    }
+                },
+
+                /**
+                 * Submits a vote for a post.
+                 */
+                async vote(id, value) {
+                    // Optimistic UI: update score immediately
+                    const post = this.posts.find(p => p.id === id);
+                    if (post) post.score += value;
+
+                    try {
+                        await fetch(`/api/posts/${id}/vote`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ value: value })
+                        });
+                        // No need to handle response, WebSocket will send update.
+                    } catch (error) {
+                        console.error('Vote failed:', error);
+                        // Rollback optimistic update on error
+                        if (post) post.score -= value;
+                    }
+                },
+
+                /**
+                 * Connects to the WebSocket server.
+                 */
+                connectWebSocket() {
+                    // Use wss:// in production
+                    const wsHost = `ws://${window.location.host}/ws`;
+                    this.ws = new WebSocket(wsHost);
+
+                    this.ws.onmessage = (event) => {
+                        const msg = JSON.parse(event.data);
+                        this.handleWsMessage(msg);
+                    };
+
+                    this.ws.onclose = () => {
+                        console.log('WebSocket closed. Reconnecting in 3s...');
+                        setTimeout(() => this.connectWebSocket(), 3000);
+                    };
+
+                    this.ws.onerror = (err) => {
+                        console.error('WebSocket error:', err);
+                    };
+                },
+
+                /**
+                 * Handles incoming messages from the WebSocket.
+                 */
+                handleWsMessage(msg) {
+                    switch (msg.type) {
+                        case 'new_post':
+                            // Add new post to the top of the list
+                            this.posts.unshift(msg.payload);
+                            // Add a small highlight effect
+                            this.$nextTick(() => {
+                                const el = document.getElementById(`post-${msg.payload.id}`);
+                                if (el) {
+                                    el.classList.add('post-new');
+                                    setTimeout(() => el.classList.remove('post-new'), 500);
+                                }
+                            });
+                            break;
+                        
+                        case 'vote_update':
+                            // Find post and update its score
+                            const post = this.posts.find(p => p.id === msg.payload.id);
+                            if (post) {
+                                post.score = msg.payload.newScore;
+                            }
+                            break;
+
+                        case 'delete_post':
+                            // Remove the post from the array
+                            this.posts = this.posts.filter(p => p.id !== msg.payload.id);
+                            break;
+                    }
+                }
+            };
+        }
+    </script>
+
+</body>
+</html>
