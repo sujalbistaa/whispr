@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
-	// "time" // This import is not needed here
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
@@ -18,47 +17,36 @@ import (
 )
 
 // --- Configuration Constants ---
-
 const (
-	// Max content length for a post (in characters)
-	maxPostLength = 1000
-	// Rate limit: requests per second
-	rateLimitRPS = 1.0 / 3.0 // 1 request every 3 seconds
-	// Rate limit: burst size
+	maxPostLength  = 1000
+	rateLimitRPS   = 1.0 / 3.0 // 1 request every 3 seconds
 	rateLimitBurst = 1
 )
 
 // --- Structs for request binding ---
-
-// CreatePostInput defines the expected JSON body for creating a post.
 type CreatePostInput struct {
 	Content string `json:"content" binding:"required,min=1,max=1000"`
 }
-
-// VoteInput defines the expected JSON body for voting.
 type VoteInput struct {
 	Value int `json:"value" binding:"required,oneof=-1 1"` // Must be 1 or -1
 }
 
 // --- WebSocket Payloads ---
 
-// WsMessage is the envelope for all our real-time messages.
+// WsMessage defines the JSON structure our frontend *expects*.
 type WsMessage struct {
-	Type    string      `json:"type"`    // "new_post", "vote_update", "delete_post"
-	Payload interface{} `json:"payload"` // The data (e.g., a Post object)
+	Type string      `json:"type"`
+	Data interface{} `json:"data"`
 }
 
 // --- Rate Limiter ---
-
-// IPRateLimiter holds a map of IP addresses to rate limiters
 type IPRateLimiter struct {
 	visitors map[string]*rate.Limiter
 	mu       sync.RWMutex
-	rps      rate.Limit // requests per second
-	burst    int        // max burst size
+	rps      rate.Limit
+	burst    int
 }
 
-// NewIPRateLimiter creates a new rate limiter
 func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
 	return &IPRateLimiter{
 		visitors: make(map[string]*rate.Limiter),
@@ -67,12 +55,9 @@ func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
 		burst:    b,
 	}
 }
-
-// GetLimiter returns the rate limiter for a given IP
 func (rl *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-
 	limiter, exists := rl.visitors[ip]
 	if !exists {
 		limiter = rate.NewLimiter(rl.rps, rl.burst)
@@ -80,8 +65,6 @@ func (rl *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
 	}
 	return limiter
 }
-
-// RateLimitMiddleware is the Gin middleware for our rate limiter
 func RateLimitMiddleware(limiter *IPRateLimiter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
@@ -94,14 +77,11 @@ func RateLimitMiddleware(limiter *IPRateLimiter) gin.HandlerFunc {
 }
 
 // --- Handlers ---
-
-// Env holds dependencies for our handlers (DB, Hub)
 type Env struct {
 	DB  *gorm.DB
 	Hub *ws.Hub
 }
 
-// GetPosts retrieves all non-hidden posts, ordered by creation date
 func (e *Env) GetPosts(c *gin.Context) {
 	var posts []models.Post
 	if err := e.DB.Order("created_at desc").Where("hidden = ?", false).Find(&posts).Error; err != nil {
@@ -112,7 +92,6 @@ func (e *Env) GetPosts(c *gin.Context) {
 	c.JSON(http.StatusOK, posts)
 }
 
-// GetTrendingPosts retrieves top posts.
 func (e *Env) GetTrendingPosts(c *gin.Context) {
 	var posts []models.Post
 	if err := e.DB.Order("score desc, created_at desc").Where("hidden = ?", false).Limit(20).Find(&posts).Error; err != nil {
@@ -123,42 +102,37 @@ func (e *Env) GetTrendingPosts(c *gin.Context) {
 	c.JSON(http.StatusOK, posts)
 }
 
-// CreatePost creates a new post, saves it, and broadcasts it
 func (e *Env) CreatePost(c *gin.Context) {
 	var input CreatePostInput
-
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input: " + err.Error()})
 		return
 	}
-
 	post := models.Post{
 		Content: input.Content,
-		Score:   1, 
+		Score:   1,
 	}
-
 	if err := e.DB.Create(&post).Error; err != nil {
 		log.Printf("Error creating post: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create post"})
 		return
 	}
 
-	msg := WsMessage{Type: "new_post", Payload: post}
+	// --- UPDATE ---
+	// Send a message that matches the new frontend
+	msg := WsMessage{Type: "new_post", Data: post}
 	e.broadcastMessage(msg)
 
 	c.JSON(http.StatusCreated, post)
 }
 
-// VoteOnPost applies a +1 or -1 vote to a post
 func (e *Env) VoteOnPost(c *gin.Context) {
 	var input VoteInput
-
 	postID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid post ID"})
 		return
 	}
-
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input: " + err.Error()})
 		return
@@ -168,27 +142,20 @@ func (e *Env) VoteOnPost(c *gin.Context) {
 	var newScore int
 
 	err = e.DB.Transaction(func(tx *gorm.DB) error {
-		// Find the post, lock it, and check that it's not hidden
 		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("hidden = ?", false).First(&post, postID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return errors.New("post not found")
 			}
 			return err
 		}
-
-		vote := models.Vote{
-			PostID: uint(postID),
-			Value:  input.Value,
-		}
+		vote := models.Vote{PostID: uint(postID), Value: input.Value}
 		if err := tx.Create(&vote).Error; err != nil {
 			return errors.New("failed to record vote")
 		}
-
 		newScore = post.Score + input.Value
 		if err := tx.Model(&post).Update("score", newScore).Error; err != nil {
 			return errors.New("failed to update post score")
 		}
-
 		return nil
 	})
 
@@ -202,14 +169,15 @@ func (e *Env) VoteOnPost(c *gin.Context) {
 		return
 	}
 
-	payload := gin.H{"id": post.ID, "newScore": newScore}
-	msg := WsMessage{Type: "vote_update", Payload: payload}
+	// --- UPDATE ---
+	// Send a message that matches the new frontend
+	payload := gin.H{"id": post.ID, "score": newScore}
+	msg := WsMessage{Type: "vote", Data: payload}
 	e.broadcastMessage(msg)
 
 	c.JSON(http.StatusOK, payload)
 }
 
-// DeletePost performs a "soft delete" on a post, marking it as hidden.
 func (e *Env) DeletePost(c *gin.Context) {
 	postID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -226,11 +194,9 @@ func (e *Env) DeletePost(c *gin.Context) {
 			}
 			return err
 		}
-
 		if err := tx.Model(&post).Update("hidden", true).Error; err != nil {
 			return errors.New("failed to hide post")
 		}
-
 		return nil
 	})
 
@@ -244,14 +210,16 @@ func (e *Env) DeletePost(c *gin.Context) {
 		return
 	}
 
+	// --- UPDATE ---
+	// Send a message that matches the new frontend
 	payload := gin.H{"id": post.ID}
-	msg := WsMessage{Type: "delete_post", Payload: payload}
+	msg := WsMessage{Type: "delete", Data: payload}
 	e.broadcastMessage(msg)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Post hidden successfully"})
 }
 
-// broadcastMessage is a helper to marshal and send a WsMessage
+// broadcastMessage helper now uses the WsMessage struct
 func (e *Env) broadcastMessage(msg WsMessage) {
 	jsonMsg, err := json.Marshal(msg)
 	if err != nil {

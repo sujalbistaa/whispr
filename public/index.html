@@ -1,248 +1,290 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Whispr - Confession Wall</title>
+    <title>Whispr - Anonymous Confessions</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <style>
-        /* Simple dark mode */
-        body { background-color: #111827; color: #d1d5db; }
-        /* Style for new posts fading in */
-        .post-new {
-            animation: fadeIn 0.5s ease-out;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-    </style>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'><path d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/></svg>">
 </head>
-<body class="antialiased">
-
-    <div x-data="whisprApp()" class="container mx-auto max-w-2xl p-4">
-
-        <header class="text-center my-8">
-            <h1 class="text-5xl font-bold text-white">Whispr</h1>
-            <p class="text-lg text-gray-400">Your real-time anonymous confession wall.</p>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
+    <div x-data="whispr()" x-init="init()" class="max-w-2xl mx-auto p-4">
+        <header class="mb-8 mt-6">
+            <div class="flex items-center justify-between">
+                <h1 class="text-3xl font-semibold tracking-tight">Whispr</h1>
+                <div class="flex gap-2 bg-zinc-900 rounded-lg p-1">
+                    <button 
+                        @click="switchMode('latest')" 
+                        :class="mode === 'latest' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                    >
+                        Latest
+                    </button>
+                    <button 
+                        @click="switchMode('trending')" 
+                        :class="mode === 'trending' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                    >
+                        Trending
+                    </button>
+                </div>
+            </div>
         </header>
 
-        <form @submit.prevent="submitPost" class="mb-8">
-            <textarea
-                x-model="newPostContent"
-                class="w-full p-3 bg-gray-800 border-2 border-gray-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
-                rows="3"
-                placeholder="What's your confession? (Max 1000 chars)"
-                maxlength="1000"
-            ></textarea>
-            <div class="flex justify-between items-center mt-2">
-                <span x-text="newPostContent.length + ' / 1000'" class="text-sm text-gray-500"></span>
-                <button
-                    type="submit"
-                    :disabled="isLoading || newPostContent.length === 0"
-                    class="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">
-                    <span x-show="!isLoading">Post</span>
-                    <span x-show="isLoading">Posting...</span>
-                </button>
-            </div>
-            <p x-show="errorMessage" x-text="errorMessage" class="text-red-400 text-sm mt-2"></p>
-        </form>
-
-        <div class="mb-4 flex border-b border-gray-700">
-            <button
-                @click="setView('latest')"
-                :class="viewMode === 'latest' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'"
-                class="px-4 py-2 font-medium border-b-2 -mb-px">
-                Latest
-            </button>
-            <button
-                @click="setView('trending')"
-                :class="viewMode === 'trending' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'"
-                class="px-4 py-2 font-medium border-b-2 -mb-px">
-                Trending
-            </button>
+        <div class="bg-zinc-900 rounded-lg p-6 mb-6 border border-zinc-800">
+            <form @submit.prevent="submitPost()">
+                <textarea 
+                    x-model="content"
+                    @input="updateCharCount()"
+                    placeholder="Share something anonymously..."
+                    maxlength="1000"
+                    rows="4"
+                    class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700 resize-none"
+                ></textarea>
+                <div class="flex items-center justify-between mt-3">
+                    <span class="text-sm text-zinc-500" x-text="charCount + ' / 1000'"></span>
+                    <button 
+                        type="submit"
+                        :disabled="posting || content.trim().length === 0"
+                        :class="posting || content.trim().length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-indigo-700'"
+                        class="bg-indigo-600 text-white px-6 py-2 rounded-lg text-sm font-medium transition-colors"
+                    >
+                        <span x-show="!posting">Post</span>
+                        <span x-show="posting">Posting...</span>
+                    </button>
+                </div>
+            </form>
         </div>
 
-        <div class="space-y-4">
+        <div x-show="loading" class="text-center py-12">
+            <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-zinc-700 border-t-zinc-400"></div>
+        </div>
+
+        <div x-show="!loading" class="space-y-4">
             <template x-for="post in posts" :key="post.id">
-                <article
-                    :id="'post-' + post.id"
-                    class="bg-gray-800 rounded-lg shadow p-4 flex space-x-4 transition-all">
-                    <div class="flex flex-col items-center space-y-1">
-                        <button @click="vote(post.id, 1)" class="p-1 text-gray-400 hover:text-green-500 rounded-full">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path></svg>
-                        </button>
-                        <span x-text="post.score" class="text-lg font-bold text-white"></span>
-                        <button @click="vote(post.id, -1)" class="p-1 text-gray-400 hover:text-red-500 rounded-full">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
-                        </button>
+                <div 
+                    x-show="post.visible !== false"
+                    x-transition:enter="transition ease-out duration-200"
+                    x-transition:enter-start="opacity-0 translate-y-4"
+                    x-transition:enter-end="opacity-100 translate-y-0"
+                    class="bg-zinc-900 rounded-lg p-6 border border-zinc-800"
+                >
+                    <p class="text-zinc-100 whitespace-pre-wrap leading-relaxed mb-4" x-text="post.content"></p>
+                    <div class="flex items-center gap-4">
+                        <div class="flex items-center gap-2 bg-zinc-950 rounded-lg px-3 py-1.5 border border-zinc-800">
+                            <button 
+                                @click="vote(post.id, 1)"
+                                class="text-zinc-400 hover:text-indigo-400 transition-colors p-1"
+                                title="Upvote"
+                            >
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>
+                                </svg>
+                            </button>
+                            <span class="text-sm font-medium text-zinc-300 min-w-[2rem] text-center" x-text="post.score"></span>
+                            <button 
+                                @click="vote(post.id, -1)"
+                                class="text-zinc-400 hover:text-red-400 transition-colors p-1"
+                                title="Downvote"
+                            >
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <span class="text-xs text-zinc-500" x-text="formatTime(post.createdAt)"></span>
                     </div>
-                    <div class="flex-1">
-                        <p x-text="post.content" class="text-white text-lg whitespace-pre-wrap"></p>
-                        <p class="text-sm text-gray-500 mt-2" x-text="new Date(post.createdAt).toLocaleString()"></p>
-                    </div>
-                </article>
+                </div>
             </template>
+
+            <div x-show="posts.length === 0 && !loading" class="text-center py-12 text-zinc-500">
+                <p>No posts yet. Be the first to share something!</p>
+            </div>
         </div>
     </div>
 
     <script>
-        function whisprApp() {
+        function whispr() {
             return {
-                // --- Data ---
                 posts: [],
-                newPostContent: '',
-                isLoading: false,
-                errorMessage: '',
-                viewMode: 'latest', // 'latest' or 'trending'
+                content: '',
+                charCount: 0,
+                mode: 'latest',
+                loading: true,
+                posting: false,
                 ws: null,
+                reconnectAttempts: 0,
+                maxReconnectAttempts: 10,
 
-                // --- Methods ---
-
-                /**
-                 * Called when the component is initialized.
-                 */
                 init() {
                     this.fetchPosts();
-                    this.connectWebSocket();
+                    this.connectWS();
                 },
 
-                /**
-                 * Sets the view mode and fetches new posts.
-                 */
-                setView(mode) {
-                    this.viewMode = mode;
-                    this.fetchPosts();
+                updateCharCount() {
+                    this.charCount = this.content.length;
                 },
 
-                /**
-                 * Fetches posts from the API based on viewMode.
-                 */
                 async fetchPosts() {
-                    this.isLoading = true;
+                    this.loading = true;
                     try {
-                        const response = await fetch(`/api/${this.viewMode}`);
-                        if (!response.ok) throw new Error('Failed to fetch posts.');
-                        this.posts = await response.json();
+                        const endpoint = this.mode === 'latest' ? '/api/posts' : '/api/trending';
+                        const response = await fetch(endpoint);
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.posts = data || [];
+                        }
                     } catch (error) {
-                        this.errorMessage = error.message;
+                        console.error('Error fetching posts:', error);
                     } finally {
-                        this.isLoading = false;
+                        this.loading = false;
                     }
                 },
 
-                /**
-                 * Submits a new post to the API.
-                 */
                 async submitPost() {
-                    if (this.newPostContent.length === 0) return;
-                    this.isLoading = true;
-                    this.errorMessage = '';
+                    if (this.content.trim().length === 0 || this.posting) return;
+
+                    this.posting = true;
                     try {
                         const response = await fetch('/api/posts', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ content: this.newPostContent })
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({ content: this.content.trim() })
                         });
-                        
-                        if (response.status === 429) {
-                            throw new Error('You are posting too fast. Please wait.');
+
+                        if (response.ok) {
+                            this.content = '';
+                            this.charCount = 0;
+                        } else {
+                            console.error('Failed to post');
                         }
-                        if (!response.ok) {
-                            throw new Error('Failed to submit post.');
-                        }
-                        
-                        // We don't need to add the post here.
-                        // The WebSocket 'new_post' message will do it.
-                        this.newPostContent = '';
                     } catch (error) {
-                        this.errorMessage = error.message;
+                        console.error('Error posting:', error);
                     } finally {
-                        this.isLoading = false;
+                        this.posting = false;
                     }
                 },
 
-                /**
-                 * Submits a vote for a post.
-                 */
-                async vote(id, value) {
-                    // Optimistic UI: update score immediately
-                    const post = this.posts.find(p => p.id === id);
-                    if (post) post.score += value;
-
+                async vote(postId, value) {
                     try {
-                        await fetch(`/api/posts/${id}/vote`, {
+                        const response = await fetch(`/api/posts/${postId}/vote`, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ value: value })
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({ value })
                         });
-                        // No need to handle response, WebSocket will send update.
+
+                        if (!response.ok) {
+                            console.error('Failed to vote');
+                        }
                     } catch (error) {
-                        console.error('Vote failed:', error);
-                        // Rollback optimistic update on error
-                        if (post) post.score -= value;
+                        console.error('Error voting:', error);
                     }
                 },
 
-                /**
-                 * Connects to the WebSocket server.
-                 */
-                connectWebSocket() {
-                    // Use wss:// in production
-                    const wsHost = `ws://${window.location.host}/ws`;
-                    this.ws = new WebSocket(wsHost);
+                switchMode(newMode) {
+                    if (this.mode !== newMode) {
+                        this.mode = newMode;
+                        this.fetchPosts();
+                    }
+                },
+
+                connectWS() {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+                    this.ws = new WebSocket(wsUrl);
+
+                    this.ws.onopen = () => {
+                        console.log('WebSocket connected');
+                        this.reconnectAttempts = 0;
+                    };
 
                     this.ws.onmessage = (event) => {
-                        const msg = JSON.parse(event.data);
-                        this.handleWsMessage(msg);
+                        try {
+                            const message = JSON.parse(event.data);
+                            this.handleWSMessage(message);
+                        } catch (error) {
+                            console.error('Error parsing WebSocket message:', error);
+                        }
                     };
 
                     this.ws.onclose = () => {
-                        console.log('WebSocket closed. Reconnecting in 3s...');
-                        setTimeout(() => this.connectWebSocket(), 3000);
+                        console.log('WebSocket disconnected');
+                        this.reconnect();
                     };
 
-                    this.ws.onerror = (err) => {
-                        console.error('WebSocket error:', err);
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
                     };
                 },
 
-                /**
-                 * Handles incoming messages from the WebSocket.
-                 */
-                handleWsMessage(msg) {
-                    switch (msg.type) {
+                handleWSMessage(message) {
+                    switch (message.type) {
                         case 'new_post':
-                            // Add new post to the top of the list
-                            this.posts.unshift(msg.payload);
-                            // Add a small highlight effect
-                            this.$nextTick(() => {
-                                const el = document.getElementById(`post-${msg.payload.id}`);
-                                if (el) {
-                                    el.classList.add('post-new');
-                                    setTimeout(() => el.classList.remove('post-new'), 500);
-                                }
-                            });
-                            break;
-                        
-                        case 'vote_update':
-                            // Find post and update its score
-                            const post = this.posts.find(p => p.id === msg.payload.id);
-                            if (post) {
-                                post.score = msg.payload.newScore;
+                            // FIX: Check `message.data` (which we send from Go)
+                            if (this.mode === 'latest' && message.data) {
+                                this.posts.unshift(message.data);
                             }
                             break;
-
-                        case 'delete_post':
-                            // Remove the post from the array
-                            this.posts = this.posts.filter(p => p.id !== msg.payload.id);
+                        case 'vote':
+                            // FIX: Check `message.data`
+                            if (message.data) {
+                                // The payload is {id, score}
+                                const post = this.posts.find(p => p.id === message.data.id);
+                                if (post) {
+                                    post.score = message.data.score;
+                                }
+                            }
+                            break;
+                        case 'delete':
+                            // FIX: Check `message.data`
+                            if (message.data) {
+                                // The payload is {id}
+                                const index = this.posts.findIndex(p => p.id === message.data.id);
+                                if (index !== -1) {
+                                    // Set a flag for the transition to work
+                                    this.posts[index].visible = false;
+                                    // Remove from array after transition
+                                    setTimeout(() => {
+                                        this.posts.splice(index, 1);
+                                    }, 200);
+                                }
+                            }
                             break;
                     }
+                },
+
+                reconnect() {
+                    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                        this.reconnectAttempts++;
+                        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+                        console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+                        setTimeout(() => this.connectWS(), delay);
+                    }
+                },
+
+                formatTime(timestamp) {
+                    if (!timestamp) return '';
+                    const date = new Date(timestamp);
+                    const now = new Date();
+                    const diff = now - date;
+                    const minutes = Math.floor(diff / 60000);
+                    const hours = Math.floor(diff / 3600000);
+                    const days = Math.floor(diff / 86400000);
+
+                    if (minutes < 1) return 'just now';
+                    if (minutes < 60) return `${minutes}m ago`;
+                    if (hours < 24) return `${hours}h ago`;
+                    if (days < 7) return `${days}d ago`;
+                    return date.toLocaleDateString();
                 }
-            };
+            }
         }
     </script>
-
 </body>
 </html>
